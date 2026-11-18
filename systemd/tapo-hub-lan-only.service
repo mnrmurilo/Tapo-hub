@@ -1,0 +1,13 @@
+[Unit]
+Description=Restrict Tapo Hub egress to the configured LAN
+Before=tapo-hub.service
+ConditionPathExists=/etc/tapo-hub/lan-only.nft
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/tapo-hub/lan-only.nft
+ExecStop=/usr/sbin/nft delete table inet tapo_hub
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

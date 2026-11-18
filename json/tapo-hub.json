@@ -1,0 +1,84 @@
+{
+  "name": "Tapo Hub",
+  "slug": "tapo-hub",
+  "categories": [
+    7,
+    15
+  ],
+  "date_created": "2026-11-18",
+  "type": "ct",
+  "updateable": true,
+  "privileged": false,
+  "interface_port": null,
+  "documentation": "https://github.com/mnrmurilo/Tapo-hub/blob/main/README.md",
+  "website": "https://github.com/mnrmurilo/Tapo-hub",
+  "repository": "https://github.com/mnrmurilo/Tapo-hub",
+  "architectures": [
+    "amd64"
+  ],
+  "platforms": [
+    "pve"
+  ],
+  "logo": null,
+  "description": "Experimental local Tapo camera hub with encrypted playback and local face recognition.",
+  "install_methods": [
+    {
+      "type": "default",
+      "script": "ct/tapo-hub.sh",
+      "config_path": "/etc/tapo-hub/config.json",
+      "resources": {
+        "cpu": 2,
+        "ram": 2048,
+        "hdd": 8,
+        "os": "Debian",
+        "version": "13"
+      }
+    }
+  ],
+  "app_vars": [
+    {
+      "name": "var_repository",
+      "label": "Published Tapo Hub repository (owner/repository)",
+      "type": "text",
+      "required": false,
+      "default": "mnrmurilo/Tapo-hub"
+    },
+    {
+      "name": "var_recording_storage",
+      "label": "Proxmox recording-volume storage pool",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "var_recording_gb",
+      "label": "Dedicated recording volume size (GiB)",
+      "type": "text",
+      "default": "100"
+    },
+    {
+      "name": "var_setup_json",
+      "label": "Optional private unattended setup JSON",
+      "type": "text",
+      "secret": true,
+      "required": false
+    }
+  ],
+  "default_credentials": {
+    "username": null,
+    "password": null
+  },
+  "notes": [
+    {
+      "type": "info",
+      "text": "Community helper candidate; a tagged application release and real one-command host validation are required before upstream submission."
+    },
+    {
+      "type": "warning",
+      "text": "Recording storage is a separate new volume. Existing unrelated data is not adopted."
+    },
+    {
+      "type": "info",
+      "text": "Local face inference is installed; model setup requires an authorized model source. Native face push is unsupported."
+    }
+  ]
+}

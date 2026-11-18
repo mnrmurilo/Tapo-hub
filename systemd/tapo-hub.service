@@ -1,0 +1,25 @@
+[Unit]
+Description=Local Tapo camera hub
+Requires=tapo-hub-lan-only.service
+After=network-online.target tapo-hub-lan-only.service
+Wants=tapo-hub-face.service
+ConditionPathExists=/etc/tapo-hub/config.json
+
+[Service]
+WorkingDirectory=/opt/tapo-hub/app
+Environment=TAPO_FACE_RECOGNITION=1
+ExecStartPre=/usr/bin/mountpoint --quiet /var/lib/tapo-hub/recordings
+ExecStart=/opt/tapo-hub/.venv/bin/python /opt/tapo-hub/app/launch.py
+ReadWritePaths=/var/lib/tapo-hub
+RestrictAddressFamilies=AF_INET AF_UNIX
+Restart=on-failure
+RestartSec=5
+User=root
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+[Unit]
+Description=Continuous TC70 recording for %i
+Requires=tapo-hub.service
+After=tapo-hub.service
+
+[Service]
+WorkingDirectory=/opt/tapo-hub/app
+ExecStartPre=/usr/bin/mountpoint --quiet /var/lib/tapo-hub/recordings
+ExecStart=/opt/tapo-hub/.venv/bin/python /opt/tapo-hub/app/continuous_recording.py --mac %i
+ReadWritePaths=/var/lib/tapo-hub
+RestrictAddressFamilies=AF_INET AF_UNIX
+MemoryMax=192M
+MemorySwapMax=0
+CPUQuota=40%
+TimeoutStopSec=35
+KillMode=mixed
+Restart=on-failure
+RestartSec=5
+User=root
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=tapo-hub.service

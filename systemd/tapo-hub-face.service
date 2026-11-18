@@ -1,0 +1,30 @@
+[Unit]
+Description=Local YuNet and ArcFace inference
+ConditionPathExists=/var/lib/tapo-hub/models/arcface_manifest.json
+
+[Service]
+WorkingDirectory=/opt/tapo-hub/app
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+Environment=OPENCV_IO_MAX_IMAGE_PIXELS=4194304
+ExecStart=/opt/tapo-hub/.venv/bin/python /opt/tapo-hub/app/face_inference.py
+RuntimeDirectory=tapo-face
+RuntimeDirectoryMode=0700
+ReadOnlyPaths=/var/lib/tapo-hub/recordings
+InaccessiblePaths=-/var/lib/tapo-hub/recordings/faces -/var/lib/tapo-hub/state.json -/var/lib/tapo-hub/enrolled.json
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=320M
+MemorySwapMax=0
+CPUQuota=50%
+Nice=15
+Restart=on-failure
+RestartSec=5
+User=root
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

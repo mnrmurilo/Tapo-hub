@@ -1,0 +1,17 @@
+{
+  "model_id": "arcface-buffalo-sc-w600k_mbf-v1",
+  "embedding_dimensions": 512,
+  "archive_source": "https://github.com/deepinsight/insightface/releases/download/model-zoo/buffalo_sc.zip",
+  "archive_sha256": "57d31b56b6ffa911c8a73cfc1707c73cab76efe7f13b675a05223bf42de47c72",
+  "model_file": "w600k_mbf.onnx",
+  "model_sha256": "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f",
+  "bytes": 13616099,
+  "license": "Non-commercial research only; see InsightFace upstream model terms",
+  "license_source": "https://github.com/deepinsight/insightface/tree/master/python-package#license",
+  "normalization": {
+    "mean": 127.5,
+    "std": 127.5,
+    "swap_rb": true
+  },
+  "alignment": "arcface-5-landmark-112-v1"
+}
