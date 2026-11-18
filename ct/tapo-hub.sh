@@ -29,13 +29,14 @@ function update_script() {
   fi
   var_repository=$(python3 -c 'import json; print(json.load(open("/etc/tapo-hub/source.json"))["repository"])')
   if check_for_gh_release "tapo-hub" "$var_repository"; then
-    trap 'systemctl start tapo-hub-face tapo-hub' EXIT
+    BACKUP_DIR=$(mktemp -d /opt/tapo-hub-update.XXXXXX)
+    export BACKUP_DIR
+    trap 'rc=$?; if (( rc != 0 )) && [[ -f "$BACKUP_DIR/.manifest" ]]; then restore_backup; systemctl daemon-reload; else rm -rf -- "$BACKUP_DIR"; fi; systemctl start tapo-hub-face tapo-hub; exit "$rc"' EXIT
     msg_info "Stopping Tapo Hub"
     systemctl stop tapo-hub tapo-hub-face
     msg_ok "Stopped Tapo Hub"
-    create_backup /etc/tapo-hub
+    create_backup /etc/tapo-hub /opt/tapo-hub "$HOME/.tapo-hub" /etc/systemd/system/tapo-hub.service /etc/systemd/system/tapo-hub-face.service /etc/systemd/system/tapo-hub-continuous@.service
     CLEAN_INSTALL=1 CLEAN_INSTALL_KEEP=".venv" fetch_and_deploy_gh_release "tapo-hub" "$var_repository" "tarball"
-    restore_backup
     msg_info "Updating Tapo Hub and local AI dependencies"
     cd /opt/tapo-hub
     $STD uv pip install --python .venv/bin/python --require-hashes -r requirements.lock
@@ -45,6 +46,7 @@ function update_script() {
     systemctl start tapo-hub-face tapo-hub
     systemctl start 'tapo-hub-continuous@*.service' || true
     msg_ok "Started Tapo Hub"
+    rm -rf -- "$BACKUP_DIR"
     trap - EXIT
   fi
   exit

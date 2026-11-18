@@ -13,7 +13,8 @@ remain a reliability limitation. Retain an independent recording option where ne
 
 - Local H500 discovery, pairing, disk status, event lists, thumbnails and encrypted playback.
 - MAC-keyed allowlist: users supply the cameras the hub may discover. No personal camera inventory is included.
-- TD21 events, C400 hardware 2.x events and TC70 hardware 5.x support; TC70 continuous recording is optional.
+- TD21 events, C400 hardware 2.x events and TC70 hardware 5.x continuous recording.
+  TC70 hub storage requires explicitly enabling its continuous recorder; at most one is supported.
 - Local face detection/recognition, familiar/unknown profiles, photo enrollment, editing,
   combining and links back to saved event footage in Tapo.
 - Dedicated recording storage, oldest-first retention and explicit validated fragment recovery.
@@ -42,7 +43,8 @@ with `uv pip install --require-hashes`. Updates and CI use the same environment.
 ## Install with the Proxmox helper
 
 Source: [mnrmurilo/Tapo-hub](https://github.com/mnrmurilo/Tapo-hub).
-The helper requires a **tagged GitHub release**, which is not available yet.
+The helper requires a **tagged GitHub release**, which is not available yet. The `v0.1.0` experimental prerelease is available
+for evaluation; it is not selected by the stable-release installer.
 A source checkout alone is not sufficient for the release-based installer.
 
 Once a GitHub release exists, run `ct/tapo-hub.sh` from the Proxmox host. It uses the
@@ -163,4 +165,5 @@ the LAN-only policy even if the update fails. Private configuration,
 models and recordings live outside the source installation. Back up before updates;
 camera protocol changes require real-device acceptance as well as unit tests.
 See [security policy](SECURITY.md), [contributing](CONTRIBUTING.md), [privacy](docs/privacy.md),
-[helper submission](docs/community-scripts.md) and [model attribution](NOTICE.md).
+[helper submission](docs/community-scripts.md), [audit fixes](docs/audit-fixes.md)
+and [model attribution](NOTICE.md).

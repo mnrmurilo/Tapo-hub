@@ -1,7 +1,7 @@
 # Local validation — 2026-11-18
 
 - The clean unprivileged Debian 13 amd64 LXC installation checks passed, including FFmpeg publication and localhost protocol tests.
-- The current source suite runs 226 tests on the host: all applicable tests pass, with one FFmpeg-dependent test skipped there. The earlier clean-guest run also covered that test successfully.
+- The patched source suite runs 240 tests in the clean Debian 13 test LXC: all pass, including real FFmpeg interrupted-stream finalization. The host skips the two FFmpeg-dependent tests.
 - Astral uv creates the environment and installs hash-locked dependencies in the installer, updater and CI.
 - A source-only archive installed into the fresh guest using hash-locked dependencies.
 - An empty dedicated 4 GiB test recording volume initialized successfully; root-disk and unrelated-data refusal have regression coverage.
@@ -14,8 +14,15 @@
 
 The public GitHub release download and real upstream one-command host workflow are
 not tested yet: the application remote is configured, but the first tagged release
-is still pending. The local
+is still pending (v0.1.0 is an experimental prerelease). The local
 install test exercised the guest installation path, not an accepted DevScripts listing.
 Physical camera pairing was not repeated in the clean guest; its discovery subnet
 was isolated from the operational camera LAN. Model download/terms acknowledgement
 is available but the live smoke test used the compatible-file model path.
+
+Audit regression checks also verify private model-bundle recovery, complete bounded
+face-gallery synchronization, full unknown-gallery handling, bounded idle HTTP
+clients, concurrent authenticated dispatch, index-cache invalidation and recorder
+configuration. Real test-LXC checks confirmed temporary network access restores
+the firewall without restarting the hub, and a changed synthetic LAN subnet is
+applied while encrypted control and local AI remain healthy.

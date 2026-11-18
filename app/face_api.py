@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from face_database import MAX_PROFILES, profile_fields
+from face_database import MAX_PROFILES, MAX_FACES, FaceCapacityError, profile_fields
 from recording_retention import activity, completed_group
 from camera_media import STORE
 from camera_registry import camera_supported, normalize_mac
@@ -249,8 +249,8 @@ class FaceAPI:
                 result = {}
             elif method == "searchFacesInfo":
                 query = section["search_faces_info"]
-                limit = query.get("trans_limit", 100)
-                if type(limit) is not int or not 1 <= limit <= MAX_PROFILES:
+                limit = query.get("trans_limit", MAX_FACES)
+                if type(limit) is not int or not 1 <= limit <= MAX_FACES:
                     raise ValueError("Invalid face page limit")
                 if query.get("strategy", "select") != "select":
                     raise ValueError("Unsupported face search strategy")
@@ -261,9 +261,9 @@ class FaceAPI:
                 if updated_after < self.profile_refresh_time:
                     updated_after = 0
                 rows = self.db.search(tags=query.get("tag"), ids=query.get("face_id"),
-                    updated_after=updated_after, limit=MAX_PROFILES)
+                    updated_after=updated_after, limit=MAX_FACES)
                 result = {"search_faces_info_result": {"faces_infos": rows[:limit], "total_num": len(rows),
-                                                       "search_time": int(time.time() * 1000)}}
+                                                       "search_time": int(time.time() * 1000) if len(rows) <= limit else updated_after}}
             elif method == "doFaceInfoAdd":
                 result = {"action_face_info_add": self.enroll(section["action_face_info_add"])}
             elif method == "doFaceInfoAddPacketized":
@@ -380,7 +380,11 @@ class FaceAPI:
                     tags = ("familiar", "stranger") if face.get("recognizable", True) else ("stranger",)
                     key = self.db.match(face["embedding"], tags=tags)
                     if key is None:
-                        key = self.db.add("", "stranger", base64.b64decode(face["image"], validate=True), face["embedding"])
+                        try:
+                            key = self.db.add("", "stranger", base64.b64decode(face["image"], validate=True), face["embedding"])
+                        except FaceCapacityError:
+                            # A full unknown gallery must not prevent familiar matches later in this clip.
+                            continue
                     self.db.link(key, row["file_id"], row["start"])
                     self.db.queue_familiar_notification(row["camera_mac"], key, row["file_id"], row["start"])
                 self.db.mark_analyzed(row["file_id"])

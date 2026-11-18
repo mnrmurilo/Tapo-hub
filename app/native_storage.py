@@ -79,6 +79,9 @@ class NativeStorage:
                         self._save({**self.devices, mac: {**previous, "hub_storage_enabled": False}})
                     return {"error_code": 0, "result": {"general_camera_manage": {"storage_info": {
                         "storage_media_status": 0, "hub_cam_capability": 0}}}}
+                if known['model'] == 'TC70' and known.get('continuous') is not True:
+                    # TC70 reception requires an explicitly configured continuous recorder.
+                    return {"error_code": -40210}
                 if sum(other != mac and bool(record.get("hub_storage_enabled") or record.get("wifi_backup_enabled"))
                        for other, record in self.devices.items()) >= MAX_BOUND:
                     return {"error_code": -40101}

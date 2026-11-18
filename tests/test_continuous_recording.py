@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from continuous_audio import AudioPES
-from continuous_recording import publish, record_session
+from continuous_recording import publish, record_session, _record_session
 
 
 def packet(pid, payload, counter=0, first=True):
@@ -58,6 +58,30 @@ class PublisherTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 record_session('10.23.0.60', 'unused', '02:00:00:00:01:02')
             connect.assert_not_called()
+
+    @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg required for interrupted-session recovery')
+    def test_camera_disconnect_finalizes_and_publishes_valid_received_tail(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = Path(temporary)
+            source = store/'synthetic.ts'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=s=64x64:r=10',
+                            '-t', '2', '-c:v', 'libx264', '-f', 'mpegts', str(source)], check=True, timeout=15)
+            data = source.read_bytes()
+            def interrupted(*_):
+                yield data
+                raise ValueError('synthetic camera connection lost')
+            with patch('continuous_recording.STORE', store), patch('continuous_recording.activity', nullcontext), \
+                    patch('continuous_recording.check_store'), patch('continuous_recording.free_bytes', return_value=10**10), \
+                    patch('continuous_recording.preview_packets', side_effect=interrupted), \
+                    patch('continuous_recording.AudioPES.feed', return_value=[bytes([255])*32000]):
+                with self.assertRaisesRegex(ValueError, 'synthetic camera connection lost'):
+                    _record_session('10.23.0.10', 'unused', '02:00:00:00:00:01')
+            indexes = list((store/'events').glob('*.mp4.json'))
+            self.assertEqual(len(indexes), 1)
+            details = json.loads(indexes[0].read_text())
+            self.assertTrue(details['validated_recording'])
+            self.assertGreater(details['duration'], 1)
+            self.assertEqual({track['codec_type'] for track in details['verified_tracks']}, {'audio', 'video'})
 
     @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg required for recording publication')
     def test_published_audio_video_thumbnail_and_retention_identity(self):

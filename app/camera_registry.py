@@ -54,6 +54,7 @@ class CameraRegistry:
                 raise ValueError("Configured MAC already belongs to another model")
             if mac in self.devices:
                 self.devices[mac]['seed_ip'] = record['seed_ip']
+                self.devices[mac]['continuous'] = record.get('continuous', False)
                 if self.devices[mac].get('last_ip') and ipaddress.IPv4Address(self.devices[mac]['last_ip']) not in LAN:
                     self.devices[mac].update(last_ip=None, last_seen=0)
             else:

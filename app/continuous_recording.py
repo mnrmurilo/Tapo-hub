@@ -191,29 +191,39 @@ def _record_session(address, password_hash, mac, *, seconds=None, segment_second
                 threads.append(thread)
             audio = AudioPES()
             began = time.monotonic()
-            for data in packets:
-                if anchor is None:
-                    anchor = time.time()
-                check_store()
-                if free_bytes() < 100_000_000 or errors or process.poll() is not None:
-                    raise ValueError('Continuous recording interrupted')
-                for chunk in audio.feed(data):
-                    sound.put(chunk, timeout=5)
-                video.put(data, timeout=5)
-                closed_segments()
-                if sum(p.stat().st_size for p in work.glob('part-*.mp4')) > 40_000_000:
-                    raise ValueError('Unpublished continuous data exceeded limit')
-                if seconds is not None and time.monotonic() - began >= seconds:
-                    break
-                if keep_recording is not None and not keep_recording():
-                    break
+            failure = None
+            try:
+                for data in packets:
+                    if anchor is None:
+                        anchor = time.time()
+                    check_store()
+                    if free_bytes() < 100_000_000 or errors or process.poll() is not None:
+                        raise ValueError('Continuous recording interrupted')
+                    for chunk in audio.feed(data):
+                        sound.put(chunk, timeout=5)
+                    video.put(data, timeout=5)
+                    closed_segments()
+                    if sum(p.stat().st_size for p in work.glob('part-*.mp4')) > 40_000_000:
+                        raise ValueError('Unpublished continuous data exceeded limit')
+                    if seconds is not None and time.monotonic() - began >= seconds:
+                        break
+                    if keep_recording is not None and not keep_recording():
+                        break
+            except (OSError, ValueError, subprocess.SubprocessError, queue.Full) as error:
+                failure = error
+            # Even a failed camera connection can have a valid tail buffered in the muxer.
             video.put(None, timeout=5)
             sound.put(None, timeout=5)
             for thread in threads:
                 thread.join(timeout=10)
-            if any(thread.is_alive() for thread in threads) or errors or process.wait(timeout=15) != 0:
+            if any(thread.is_alive() for thread in threads) or errors:
                 raise ValueError('Continuous muxer did not finish cleanly')
+            result = process.wait(timeout=15)
             closed_segments()
+            if failure is not None:
+                raise failure
+            if result != 0:
+                raise ValueError('Continuous muxer did not finish cleanly')
             return {'segments': len(completed)}
         finally:
             packets.close()
@@ -245,7 +255,8 @@ def watch(mac):
         signal.signal(number, lambda *_: stopping.set())
     def enabled():
         return (not stopping.is_set() and
-                json.loads((STATE / 'enrolled.json').read_text()).get(mac, {}).get('hub_storage_enabled') is True)
+                json.loads((STATE / 'enrolled.json').read_text()).get(mac, {}).get('hub_storage_enabled') is True
+                and json.loads((STATE / 'cameras.json').read_text())['devices'].get(mac, {}).get('continuous') is True)
     while not stopping.is_set():
         try:
             if not enabled():

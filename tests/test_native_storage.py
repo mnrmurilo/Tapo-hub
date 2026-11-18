@@ -188,7 +188,7 @@ class NativeStorageTests(unittest.TestCase):
         self.assertEqual(self.storage.public_list()["current_bound"], 3)
 
     def test_tc70_v5_registration_reports_one_continuous_recorder(self):
-        self.cameras.devices[self.mac].update(model='TC70', hardware_version='5.0')
+        self.cameras.devices[self.mac].update(model='TC70', hardware_version='5.0', continuous=True)
         self.params['general_camera_manage']['storage_info']['basic_info']['model'] = 'TC70'
         self.register()
         listing = self.storage.public_list()

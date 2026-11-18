@@ -7,6 +7,8 @@ import logging
 import os
 from pathlib import Path
 import re
+import threading
+import stat
 from zoneinfo import ZoneInfo
 
 from camera_media import STORE
@@ -47,6 +49,8 @@ def calendar_date(value, *, month_end=False):
 class RecordingPlayback:
     def __init__(self, storage):
         self.storage = storage
+        self._index_lock = threading.Lock()
+        self._indexes = {}
 
     def camera(self, query):
         # Explicitly selected, previously paired cameras retain read access to saved footage.
@@ -92,27 +96,38 @@ class RecordingPlayback:
             raise ValueError("Recording filesystem unavailable")
         directory = STORE / "events"
         recordings = []
-        for index in directory.glob("event-*.mp4.json"):
-            if index.is_symlink() or index.stat().st_size > 2_000_000:
-                continue
-            try:
-                item = json.loads(index.read_text())
-                path = Path(str(index)[:-5])
-                if (item.get("camera_mac") not in allowed or item.get("validated_recording") is not True
-                        or item.get("format_version") != 1 or not path.is_file() or path.is_symlink()
-                        or path.stat().st_size != item["bytes"]):
+        with self._index_lock:
+            retained = {}
+            for index in directory.glob("event-*.mp4.json"):
+                try:
+                    info = index.lstat()
+                    if not stat.S_ISREG(info.st_mode) or info.st_size > 2_000_000:
+                        continue
+                    signature = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
+                    cached = self._indexes.get(index)
+                    if cached is not None and cached[0] == signature:
+                        item = cached[1]
+                    else:
+                        item = json.loads(index.read_text())
+                    retained[index] = (signature, item)
+                    path = Path(str(index)[:-5])
+                    media = path.lstat()
+                    if (item.get("camera_mac") not in allowed or item.get("validated_recording") is not True
+                            or item.get("format_version") != 1 or not stat.S_ISREG(media.st_mode)
+                            or media.st_size != item["bytes"]):
+                        continue
+                    duration = (float(item["duration"]) if item.get("event_type") == "continuous"
+                                else len(item["video_pts"]) / item["rate"])
+                    if not math.isfinite(duration) or not 0 < duration <= 125:
+                        continue
+                    start = integer(item.get("source_time"), 1)
+                    recordings.append({"path": path, "start": start, "end": start + math.ceil(duration),
+                                       "duration": duration, "file_id": path.stem, "event_type": item.get("event_type", ""),
+                                       "camera_mac": item['camera_mac'],
+                                       "precise_start": float(item.get("source_time_precise", start))})
+                except (OSError, ValueError, TypeError, KeyError, ZeroDivisionError, AttributeError):
                     continue
-                duration = (float(item["duration"]) if item.get("event_type") == "continuous"
-                            else len(item["video_pts"]) / item["rate"])
-                if not math.isfinite(duration) or not 0 < duration <= 125:
-                    continue
-                start = integer(item.get("source_time"), 1)
-                recordings.append({"path": path, "start": start, "end": start + math.ceil(duration),
-                                   "duration": duration, "file_id": path.stem, "event_type": item.get("event_type", ""),
-                                   "camera_mac": item['camera_mac'],
-                                   "precise_start": float(item.get("source_time_precise", start))})
-            except (OSError, ValueError, TypeError, KeyError, ZeroDivisionError):
-                continue
+            self._indexes = retained
         return sorted(recordings, key=lambda row: (row["start"], row["camera_mac"], row["file_id"]))
 
     def command(self, method, params):

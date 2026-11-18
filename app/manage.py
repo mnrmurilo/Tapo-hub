@@ -1,5 +1,6 @@
 """Guided setup and health checks for a dedicated Tapo Hub LXC."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import ipaddress
 import json
@@ -62,7 +63,10 @@ def validate_cameras(cameras, network):
             raise ValueError('Continuous recording is supported only for configured TC70 cameras')
         addresses.add(str(address))
         devices[mac] = {'model': camera['model'], 'seed_ip': str(address), 'last_ip': None,
-                        'last_seen': 0, 'hardware_version': camera.get('hardware_version', '')}
+                        'last_seen': 0, 'hardware_version': camera.get('hardware_version', ''),
+                        'continuous': camera.get('continuous', False)}
+    if sum(record['continuous'] for record in devices.values()) > 1:
+        raise ValueError('Only one TC70 continuous recorder is supported per hub')
     return {'devices': devices, 'pending': []}
 
 
@@ -134,13 +138,118 @@ def install_models(choice, model_path=None, accepted=False):
         network.setInput(np.zeros((1, 3, 112, 112), dtype=np.float32))
         if network.forward().size != 512:
             raise ValueError('The model must accept 112x112 RGB input and return a 512-dimensional ArcFace embedding')
-    (MODELS/detector['name']).write_bytes(detection)
-    (MODELS/'w600k_mbf.onnx').write_bytes(recognition)
-    atomic_json(MODELS/'manifest.json', {'models': [detector]})
-    atomic_json(MODELS/'arcface_manifest.json', reference)
     license_url = 'https://raw.githubusercontent.com/opencv/opencv_zoo/' + json.loads((APP/'face_models.json').read_text())['opencv_zoo_commit'] + '/models/face_detection_yunet/LICENSE'
-    (MODELS/'face_detection_yunet.LICENSE').write_bytes(download(license_url, 20_000))
+    license_data = download(license_url, 20_000)
+    if MODELS.is_symlink():
+        raise ValueError('Unsafe model directory')
+    # Stage every download and write before touching the working bundle.
+    with tempfile.TemporaryDirectory(dir=MODELS.parent, prefix='.models-') as work:
+        work = Path(work)
+        bundle, previous = work/'bundle', work/'previous'
+        bundle.mkdir(mode=0o755)
+        (bundle/detector['name']).write_bytes(detection)
+        (bundle/'w600k_mbf.onnx').write_bytes(recognition)
+        (bundle/'face_detection_yunet.LICENSE').write_bytes(license_data)
+        atomic_json(bundle/'manifest.json', {'models': [detector]})
+        atomic_json(bundle/'arcface_manifest.json', reference)
+        for path in bundle.iterdir():
+            with path.open('rb') as stream:
+                os.fsync(stream.fileno())
+        try:
+            if MODELS.exists():
+                os.replace(MODELS, previous)
+            os.replace(bundle, MODELS)
+        except BaseException:
+            if previous.exists():
+                os.replace(previous, MODELS)
+            raise
     return reference['model_id']
+
+
+@contextmanager
+def network_access():
+    """Allow an explicit download without stopping the firewall's dependent services."""
+    active = subprocess.run(['systemctl', 'is-active', '--quiet', 'tapo-hub-lan-only']).returncode == 0
+    try:
+        if active:
+            subprocess.run(['nft', 'insert', 'rule', 'inet', 'tapo_hub', 'output', 'accept'], check=True)
+        yield
+    finally:
+        if active:
+            subprocess.run(['nft', '-f', str(ETC/'lan-only.nft')], check=True)
+
+
+@contextmanager
+def configuration_changes(replace_models):
+    """Recover saved configuration and running services if reconfiguration fails."""
+    active = [name for name in ('tapo-hub', 'tapo-hub-face')
+              if subprocess.run(['systemctl', 'is-active', '--quiet', name]).returncode == 0]
+    paths = (ETC/'config.json', ETC/'cameras.json', ETC/'lan-only.nft', STATE/'state.json')
+    previous = {path: path.read_bytes() if path.exists() else None for path in paths}
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=STATE, prefix='.configuration-') as work:
+        backup = Path(work)/'models'
+        had_models = MODELS.exists()
+        if replace_models and had_models:
+            shutil.copytree(MODELS, backup)
+        try:
+            yield
+        except BaseException:
+            subprocess.run(['systemctl', 'stop', 'tapo-hub', 'tapo-hub-face'], check=True)
+            for path, data in previous.items():
+                if data is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    fd, temporary = tempfile.mkstemp(dir=path.parent)
+                    with os.fdopen(fd, 'wb') as stream:
+                        stream.write(data)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary, path)
+            if replace_models:
+                if MODELS.exists():
+                    os.replace(MODELS, Path(work)/'failed-models')
+                if had_models:
+                    os.replace(backup, MODELS)
+            if previous[ETC/'lan-only.nft'] is not None:
+                subprocess.run(['nft', '-f', str(ETC/'lan-only.nft')], check=True)
+            if previous[ETC/'config.json'] is not None:
+                reconcile_recorders(json.loads(previous[ETC/'config.json']).get('cameras', []))
+            if active:
+                subprocess.run(['systemctl', 'start', *active], check=True)
+            raise
+
+
+def apply_firewall(network):
+    rules = ('destroy table inet tapo_hub\ntable inet tapo_hub {\n'
+        ' chain output { type filter hook output priority 10; policy drop;\n'
+        ' oifname "lo" accept\n ip daddr ' + str(network) + ' accept\n'
+        ' ip daddr 255.255.255.255 udp dport 67 accept\n counter reject with icmpx type admin-prohibited\n }\n}\n')
+    fd, filename = tempfile.mkstemp(dir=ETC, prefix='.firewall-')
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(rules)
+        subprocess.run(['nft', '--check', '-f', filename], check=True)
+        subprocess.run(['nft', '-f', filename], check=True)
+        os.replace(filename, ETC/'lan-only.nft')
+    finally:
+        Path(filename).unlink(missing_ok=True)
+
+
+def reconcile_recorders(cameras):
+    from camera_registry import normalize_mac
+    wanted = {f"tapo-hub-continuous@{normalize_mac(camera['mac'])}.service"
+              for camera in cameras if camera.get('continuous')}
+    result = subprocess.run(['systemctl', 'list-unit-files', 'tapo-hub-continuous@*.service',
+                             '--no-legend', '--no-pager'], check=True, capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        unit = line.split()[0]
+        if re.fullmatch(r'tapo-hub-continuous@[0-9a-f:]+\.service', unit) and unit not in wanted:
+            subprocess.run(['systemctl', 'disable', '--now', unit], check=True)
+    for unit in sorted(wanted):
+        # Enable before starting the hub; its dependency then starts only wanted recorders.
+        subprocess.run(['systemctl', 'enable', unit], check=True)
+    return wanted
 
 
 def discovery_guide():
@@ -213,60 +322,53 @@ def configure(args):
             accepted = ask('Enter ACCEPT only if your use is authorized under the linked model terms') == 'ACCEPT'
         if choice == 'file':
             model_path = ask('Path to your compatible licensed ArcFace ONNX file')
-    firewall_active = subprocess.run(['systemctl', 'is-active', '--quiet', 'tapo-hub-lan-only']).returncode == 0
-    if firewall_active and choice in ('download', 'file'):
-        subprocess.run(['systemctl', 'stop', 'tapo-hub-lan-only'], check=True)
-    try:
-        model_id = install_models(choice or 'later', model_path, accepted)
-    finally:
-        if firewall_active and choice in ('download', 'file'):
-            subprocess.run(['systemctl', 'start', 'tapo-hub-lan-only'], check=True)
-    existing_model = json.loads((MODELS/'arcface_manifest.json').read_text())['model_id'] if (MODELS/'arcface_manifest.json').exists() else None
-    config['face_model_id'] = model_id or existing_model or 'arcface-buffalo-sc-w600k_mbf-v1'
-    subprocess.run(['systemctl', 'stop', 'tapo-hub', 'tapo-hub-face'], check=True)
-    atomic_json(ETC/'config.json', config)
-    atomic_json(ETC/'cameras.json', registry)
-    STATE.mkdir(mode=0o700, exist_ok=True)
-    state_file = STATE/'state.json'
-    state = json.loads(state_file.read_text()) if state_file.exists() else {}
-    clock = datetime.now(ZoneInfo(config.get('timezone', 'Etc/UTC')))
-    seconds = int((clock.utcoffset() - clock.dst()).total_seconds())
-    hours, minutes = divmod(abs(seconds) // 60, 60)
-    state.update(zone_id=config.get('timezone', 'Etc/UTC'), timezone=f"UTC{'+' if seconds >= 0 else '-'}{hours:02}:{minutes:02}")
-    atomic_json(state_file, state)
-    if not (ETC/'key.pem').exists():
-        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3650',
-                        '-subj', '/CN=Tapo Hub', '-keyout', str(ETC/'key.pem'), '-out', str(ETC/'cert.pem')],
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        os.chmod(ETC/'key.pem', 0o600)
-    (ETC/'lan-only.nft').write_text('destroy table inet tapo_hub\ntable inet tapo_hub {\n'
-        ' chain output { type filter hook output priority 10; policy drop;\n'
-        ' oifname "lo" accept\n ip daddr ' + str(ipaddress.IPv4Network(config['lan_cidr'], strict=False)) + ' accept\n'
-        ' ip daddr 255.255.255.255 udp dport 67 accept\n counter reject with icmpx type admin-prohibited\n }\n}\n')
-    if model_id:
-        from face_database import FaceDatabase
-        database = FaceDatabase(STORE/'faces'/'faces.duckdb')
-        database.set_enabled(True)
-        database.close()
-    subprocess.run(['systemctl', 'enable', '--now', 'tapo-hub-lan-only', 'tapo-hub-face', 'tapo-hub'], check=True)
-    for camera in config['cameras']:
-        if camera.get('continuous'):
-            from camera_registry import normalize_mac
-            subprocess.run(['systemctl', 'enable', '--now', f"tapo-hub-continuous@{normalize_mac(camera['mac'])}.service"], check=True)
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        try:
-            health = subprocess.run([sys.executable, str(APP/'manage.py'), 'doctor'],
-                                    capture_output=True, text=True, timeout=5)
-            ready = json.loads(health.stdout) if health.returncode == 0 else {}
-            if ready.get('hub') == 'ready' and (not existing_model or ready.get('local_face_ai') == 'ready'):
-                print('Verified local discovery, encrypted control, recording storage and configured AI readiness.')
-                break
-        except (subprocess.TimeoutExpired, ValueError):
-            pass
-        time.sleep(1)
-    else:
-        raise ValueError('Configuration saved, but health checks did not pass. Run tapo-hub status and inspect the service journal before pairing')
+    with configuration_changes(choice in ('download', 'file')):
+        if choice in ('download', 'file'):
+            subprocess.run(['systemctl', 'stop', 'tapo-hub-face'], check=True)
+        with network_access():
+            model_id = install_models(choice or 'later', model_path, accepted)
+        existing_model = json.loads((MODELS/'arcface_manifest.json').read_text())['model_id'] if (MODELS/'arcface_manifest.json').exists() else None
+        config['face_model_id'] = model_id or existing_model or 'arcface-buffalo-sc-w600k_mbf-v1'
+        subprocess.run(['systemctl', 'stop', 'tapo-hub', 'tapo-hub-face'], check=True)
+        atomic_json(ETC/'config.json', config)
+        atomic_json(ETC/'cameras.json', registry)
+        STATE.mkdir(mode=0o700, exist_ok=True)
+        state_file = STATE/'state.json'
+        state = json.loads(state_file.read_text()) if state_file.exists() else {}
+        clock = datetime.now(ZoneInfo(config.get('timezone', 'Etc/UTC')))
+        seconds = int((clock.utcoffset() - clock.dst()).total_seconds())
+        hours, minutes = divmod(abs(seconds) // 60, 60)
+        state.update(zone_id=config.get('timezone', 'Etc/UTC'), timezone=f"UTC{'+' if seconds >= 0 else '-'}{hours:02}:{minutes:02}")
+        atomic_json(state_file, state)
+        if not (ETC/'key.pem').exists():
+            subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3650',
+                            '-subj', '/CN=Tapo Hub', '-keyout', str(ETC/'key.pem'), '-out', str(ETC/'cert.pem')],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            os.chmod(ETC/'key.pem', 0o600)
+        apply_firewall(ipaddress.IPv4Network(config['lan_cidr'], strict=False))
+        if model_id:
+            from face_database import FaceDatabase
+            database = FaceDatabase(STORE/'faces'/'faces.duckdb')
+            database.set_enabled(True)
+            database.close()
+        wanted = reconcile_recorders(config['cameras'])
+        subprocess.run(['systemctl', 'enable', '--now', 'tapo-hub-lan-only', 'tapo-hub-face', 'tapo-hub'], check=True)
+        if wanted:
+            subprocess.run(['systemctl', 'start', *sorted(wanted)], check=True)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                health = subprocess.run([sys.executable, str(APP/'manage.py'), 'doctor'],
+                                        capture_output=True, text=True, timeout=5)
+                ready = json.loads(health.stdout) if health.returncode == 0 else {}
+                if ready.get('hub') == 'ready' and (not existing_model or ready.get('local_face_ai') == 'ready'):
+                    print('Verified local discovery, encrypted control, recording storage and configured AI readiness.')
+                    break
+            except (subprocess.TimeoutExpired, ValueError):
+                pass
+            time.sleep(1)
+        else:
+            raise ValueError('Configuration saved, but health checks did not pass. Run tapo-hub status and inspect the service journal before pairing')
     print('Configuration saved. Local AI: ' + ('models validated' if model_id or existing_model else 'installed; model setup still required'))
     discovery_guide()
 
@@ -303,19 +405,13 @@ def update():
     repository = source['repository']
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('Configure the published source repository before updating')
-    active = subprocess.run(['systemctl', 'is-active', '--quiet', 'tapo-hub-lan-only']).returncode == 0
-    if active:
-        subprocess.run(['systemctl', 'stop', 'tapo-hub-lan-only'], check=True)
-    try:
+    with network_access():
         content = download(f'https://raw.githubusercontent.com/{repository}/main/ct/tapo-hub.sh', 256_000)
         with tempfile.TemporaryDirectory() as work:
             script = Path(work)/'update.sh'
             script.write_bytes(content)
             subprocess.run(['bash', str(script)], check=True,
                            env={**os.environ, 'var_repository': repository})
-    finally:
-        if active:
-            subprocess.run(['systemctl', 'start', 'tapo-hub-lan-only'], check=True)
 
 
 def main():

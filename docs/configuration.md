@@ -44,7 +44,10 @@ The selected cameras are discovery candidates; authenticated pairing remains a
 separate Tapo step. Changing the allowlist does not delete saved video or replace
 an explicit unpair operation for an already enrolled camera.
 
-`continuous: true` is supported only for TC70 hardware5.x. It enables a recorder
+`continuous: true` is supported only for TC70 hardware5.x, with one recorder per
+hub. TC70 hub storage cannot be enabled while this option is false; event-only TC70
+reception is not implemented. Reconfiguring with false stops and disables the old
+recorder instance. The true setting enables a recorder
 instance after that camera is paired and selects hub storage. Camera-side recording
 settings are not silently rewritten. Battery-camera live view is not used as a
 permanent substitute for motion/doorbell events.

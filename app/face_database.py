@@ -13,6 +13,11 @@ CURRENT_ANALYSIS = "original-1280-dense-unknown-quality-v2"
 LEGACY_MODEL = "opencv-sface-2021dec-v1"
 MAX_IMAGE = 48_000
 MAX_PROFILES = 300
+MAX_FACES = MAX_PROFILES * 2
+
+
+class FaceCapacityError(ValueError):
+    pass
 
 
 def vector(values):
@@ -121,19 +126,19 @@ class FaceDatabase:
             raise ValueError("Invalid face image")
         now = int(time.time() * 1000)
         with self.transaction() as db:
-            if db.execute("SELECT count(*) FROM faces").fetchone()[0] >= MAX_PROFILES:
-                raise ValueError("Face capacity reached")
+            if db.execute("SELECT count(*) FROM faces WHERE tag=?", [tag]).fetchone()[0] >= MAX_PROFILES:
+                raise FaceCapacityError("Face capacity reached")
             return db.execute("""INSERT INTO faces(name,tag,image,embedding,created,fresh,modified,verified,embedding_model)
                 VALUES (?,?,?,?,?,?,?,?,?) RETURNING id""",
                 [name, tag, image, embedding, now, now, now, bool(verified), CURRENT_MODEL]).fetchone()[0]
 
     def search(self, *, tags=None, ids=None, updated_after=0, limit=100):
         if (type(updated_after) is not int or updated_after < 0 or type(limit) is not int
-                or not 1 <= limit <= MAX_PROFILES):
+                or not 1 <= limit <= MAX_FACES):
             raise ValueError("Invalid face search")
         if tags is not None and (not isinstance(tags, list) or any(t not in ("familiar", "stranger") for t in tags)):
             raise ValueError("Invalid face tags")
-        if ids is not None and (not isinstance(ids, list) or len(ids) > MAX_PROFILES
+        if ids is not None and (not isinstance(ids, list) or len(ids) > MAX_FACES
                                 or any(type(i) is not int or i <= 0 for i in ids)):
             raise ValueError("Invalid face IDs")
         with self.lock:
@@ -192,6 +197,8 @@ class FaceDatabase:
                     row = db.execute("SELECT name,tag FROM faces WHERE id=?", [target]).fetchone()
                     name, tag = profile_fields(row[0] if cover.get("name") is None else cover["name"],
                                                row[1] if cover.get("tag") is None else cover["tag"])
+                    if tag != row[1] and db.execute("SELECT count(*) FROM faces WHERE tag=?", [tag]).fetchone()[0] >= MAX_PROFILES:
+                        raise FaceCapacityError("Face capacity reached")
                     if source != target:
                         db.execute("""INSERT INTO appearances SELECT ?,event_key,event_start FROM appearances
                                       WHERE face_id=? ON CONFLICT DO NOTHING""", [target, source])

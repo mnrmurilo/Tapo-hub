@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from tls_server import TLSHTTPServer
+from tls_server import TLSHTTPServer, BoundedHTTPServer
 
 from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding, rsa
@@ -151,16 +151,17 @@ class SetupAuth:
             padded = decryptor.update(data) + decryptor.finalize()
             unpad = padding.PKCS7(128).unpadder()
             inner = json.loads(unpad.update(padded) + unpad.finalize())
-            response = dispatch(inner)
-            padder = padding.PKCS7(128).padder()
-            plain = json.dumps(response).encode()
-            padded = padder.update(plain) + padder.finalize()
-            encryptor = Cipher(algorithms.AES(session["key"]), modes.CBC(session["iv"])).encryptor()
-            encrypted = encryptor.update(padded) + encryptor.finalize()
+            # Reserve the sequence before dispatch so parallel requests cannot replay it.
             session["seq"] = max(session["seq"], seq + 1)
             session["seen_sequences"].add(seq)
             session["seen_sequences"] = {s for s in session["seen_sequences"] if s >= session["seq"] - 128}
-            return {"error_code": 0, "seq": seq, "result": {"response": base64.b64encode(encrypted).decode()}}
+        response = dispatch(inner)
+        padder = padding.PKCS7(128).padder()
+        plain = json.dumps(response).encode()
+        padded = padder.update(plain) + padder.finalize()
+        encryptor = Cipher(algorithms.AES(session["key"]), modes.CBC(session["iv"])).encryptor()
+        encrypted = encryptor.update(padded) + encryptor.finalize()
+        return {"error_code": 0, "seq": seq, "result": {"response": base64.b64encode(encrypted).decode()}}
 
     def has_session(self, peer):
         with self.lock:
@@ -651,7 +652,7 @@ def serve(args):
     media = TLSHTTPServer(("0.0.0.0", 21443), NativeMedia, tls)
     media.native_event_capture = http.native_event_capture
     threading.Thread(target=media.serve_forever, daemon=True).start()
-    playback = ThreadingHTTPServer(("0.0.0.0", 8800), PlaybackMedia)
+    playback = BoundedHTTPServer(("0.0.0.0", 8800), PlaybackMedia)
     playback.setup, playback.playback, playback.media_auth = http.setup, http.playback, http.media_auth
     playback.faces = http.faces
     threading.Thread(target=playback.serve_forever, daemon=True).start()
