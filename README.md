@@ -162,5 +162,5 @@ is configured. It temporarily opens hub egress for the explicit update, then res
 the LAN-only policy even if the update fails. Private configuration,
 models and recordings live outside the source installation. Back up before updates;
 camera protocol changes require real-device acceptance as well as unit tests.
-See [contributing](CONTRIBUTING.md), [privacy](docs/privacy.md),
+See [security policy](SECURITY.md), [contributing](CONTRIBUTING.md), [privacy](docs/privacy.md),
 [helper submission](docs/community-scripts.md) and [model attribution](NOTICE.md).
